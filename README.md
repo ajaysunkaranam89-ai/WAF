@@ -1,6 +1,8 @@
 # Web Application Firewalls on Kubernetes (kind)
 
-Two open-source WAFs for the notes app and python app. Both run side by side; keep the one you prefer.
+Two open-source WAFs for the notes app and python app.
+
+> **Step-by-step tutorial with GUI screenshots:** [`docs/BunkerWeb_Tutorial.pdf`](docs/BunkerWeb_Tutorial.pdf) (source: [`docs/BunkerWeb_Tutorial.md`](docs/BunkerWeb_Tutorial.md)). Both run side by side; keep the one you prefer.
 
 | | **BunkerWeb** (has a web GUI) | **ModSecurity + OWASP CRS** (no GUI) |
 |---|---|---|
