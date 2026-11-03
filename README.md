@@ -54,6 +54,17 @@ kubectl port-forward -n bunkerweb svc/mybw-bunkerweb-external 8080:80
 
 Note: after a few blocked requests from one address BunkerWeb's *bad behavior* feature briefly bans it (HTTP 429), then it recovers.
 
+## Maintenance mode (python app, through BunkerWeb)
+`bunkerweb/maintenance-python.yaml` is a ConfigMap that BunkerWeb loads as a custom nginx config for `python.waf.local`:
+every request gets **HTTP 503** and a "We will be back soon" page (with `Retry-After`); the app itself is untouched and
+other sites (notes) keep working. Only traffic that goes **through BunkerWeb** is affected, not direct forwards to the app.
+```bash
+kubectl apply  -f bunkerweb/maintenance-python.yaml     # maintenance ON  (takes effect in ~30 s)
+kubectl delete -f bunkerweb/maintenance-python.yaml     # maintenance OFF
+```
+To do the same for another site, copy the file and change `namespace` and the `bunkerweb.io/CONFIG_SITE` hostname.
+Tip: test with `127.0.0.1`, not `localhost`: on Windows `localhost` tries IPv6 first, where Docker Desktop answers on port 8080.
+
 ## Settings (`bunkerweb/values.yaml`)
 `securityMode: block` (use `detect` to only log), ModSecurity + CRS v4 on, `service.type: ClusterIP` (kind has no LoadBalancer).
 Per-site settings go in Ingress annotations (`bunkerweb.io/<SETTING>`); to protect another app add an Ingress with `ingressClassName: bunkerweb` in the app's namespace.

@@ -1,0 +1,20 @@
+# MAINTENANCE MODE for python.waf.local (served through BunkerWeb).
+#   ON : kubectl apply  -f bunkerweb/maintenance-python.yaml
+#   OFF: kubectl delete -f bunkerweb/maintenance-python.yaml
+# While applied, every request to the site gets HTTP 503 and the page below; the app is untouched.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maintenance-python
+  namespace: python-app
+  annotations:
+    bunkerweb.io/CONFIG_TYPE: "server-http"
+    bunkerweb.io/CONFIG_SITE: "python.waf.local"
+data:
+  maintenance.conf: |
+    default_type text/html;
+    add_header Retry-After 1800 always;
+    add_header Cache-Control "no-store" always;
+    if ($request_uri != "/__bw_maintenance_never__") {
+      return 503 '<!doctype html><html><head><meta charset="utf-8"><title>Under maintenance</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,sans-serif;background:#f4f6f8;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}div{background:#fff;padding:2.5rem 3rem;border-radius:12px;box-shadow:0 2px 12px #0002;text-align:center}h1{margin:0 0 .5rem}p{color:#555}</style></head><body><div><h1>We will be back soon</h1><p>This application is under scheduled maintenance.<br>Please try again in a little while.</p></div></body></html>';
+    }
