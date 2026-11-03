@@ -54,6 +54,20 @@ kubectl port-forward -n bunkerweb svc/mybw-bunkerweb-external 8080:80
 
 Note: after a few blocked requests from one address BunkerWeb's *bad behavior* feature briefly bans it (HTTP 429), then it recovers.
 
+## Automatic "service is down" page (notes + python)
+`bunkerweb/auto-error-page.yaml` (two ConfigMaps) plus two annotations in `bunkerweb/ingresses.yaml` make BunkerWeb show a
+colourful page **by itself** whenever the app behind it is unreachable (no healthy pods, crash, rollout), and serve the real
+app again as soon as it is back. Nothing to switch on or off.
+- `INTERCEPTED_ERROR_CODES` drops 502/503/504 from BunkerWeb's own error pages so our page can take them.
+- `REVERSE_PROXY_CONNECT_TIMEOUT: 5s` makes a dead upstream fail fast.
+- The ConfigMap (`CONFIG_TYPE: server-http`, `CONFIG_SITE: <host>`) adds `error_page 502 503 504 @bw_app_down`, which returns the page.
+  The page has `<meta http-equiv="refresh" content="10">`, so users are sent back to the app automatically.
+- The WAF keeps blocking attacks while the app is down (tested: SQLi got 403).
+Tested on a throwaway app: no pods -> page; pod started -> real app back in ~15 s.
+```bash
+kubectl apply -f bunkerweb/auto-error-page.yaml -f bunkerweb/ingresses.yaml
+```
+
 ## Maintenance mode (python app, through BunkerWeb)
 `bunkerweb/maintenance-python.yaml` is a ConfigMap that BunkerWeb loads as a custom nginx config for `python.waf.local`:
 every request gets **HTTP 503** and a "We will be back soon" page (with `Retry-After`); the app itself is untouched and

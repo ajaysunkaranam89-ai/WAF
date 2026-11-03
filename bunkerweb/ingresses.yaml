@@ -8,6 +8,8 @@ metadata:
   annotations:
     bunkerweb.io/USE_MODSECURITY: "yes"
     bunkerweb.io/USE_MODSECURITY_CRS: "yes"
+    bunkerweb.io/INTERCEPTED_ERROR_CODES: "400 401 403 404 405 413 429 500 501"   # 502/503/504 handled by auto-error-page.yaml
+    bunkerweb.io/REVERSE_PROXY_CONNECT_TIMEOUT: "5s"                               # app down -> fail fast, show the page
 spec:
   ingressClassName: bunkerweb
   rules:
@@ -30,6 +32,8 @@ metadata:
   annotations:
     bunkerweb.io/USE_MODSECURITY: "yes"
     bunkerweb.io/USE_MODSECURITY_CRS: "yes"
+    bunkerweb.io/INTERCEPTED_ERROR_CODES: "400 401 403 404 405 413 429 500 501"   # 502/503/504 handled by auto-error-page.yaml
+    bunkerweb.io/REVERSE_PROXY_CONNECT_TIMEOUT: "5s"                               # app down -> fail fast, show the page
 spec:
   ingressClassName: bunkerweb
   rules:

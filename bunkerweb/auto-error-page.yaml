@@ -1,0 +1,71 @@
+# AUTOMATIC maintenance page: shown by BunkerWeb whenever the app behind it is down (no healthy pods, crash, rollout).
+# Nothing to switch on/off: when the app is healthy again, the real app is served again and the page's auto-refresh lands users on it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autodown-python
+  namespace: python-app
+  annotations:
+    bunkerweb.io/CONFIG_TYPE: "server-http"
+    bunkerweb.io/CONFIG_SITE: "python.waf.local"
+data:
+  auto-down-page.conf: |
+    # Upstream (the app) unreachable -> show this page; when the app is back the real app is served again.
+    error_page 502 503 504 @bw_app_down;
+    location @bw_app_down {
+      internal;
+      modsecurity off;
+      default_type text/html;
+      charset utf-8;
+      add_header Retry-After 30 always;
+      add_header Cache-Control "no-store" always;
+      return 503 '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="10"><title>Python app is getting back up</title><style>
+      *{box-sizing:border-box}
+      body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:Segoe UI,system-ui,sans-serif;color:#fff;background:linear-gradient(-45deg,#ff6a00,#ee0979,#7f00ff,#00c6ff);background-size:400% 400%;animation:bg 14s ease infinite}
+      @keyframes bg{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+      .card{width:min(92vw,560px);padding:2.6rem 2.2rem;text-align:center;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.4);border-radius:24px;backdrop-filter:blur(14px);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+      .ic{font-size:5rem;display:inline-block;animation:pulse 2s ease-in-out infinite;filter:drop-shadow(0 6px 10px rgba(0,0,0,.35))}
+      @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
+      h1{margin:.4rem 0 .6rem;font-size:2.1rem;text-shadow:0 3px 12px rgba(0,0,0,.35)}
+      p{margin:.3rem 0;font-size:1.1rem;opacity:.95;line-height:1.5}
+      .bar{margin:1.8rem auto 1rem;height:12px;width:80%;background:rgba(255,255,255,.28);border-radius:99px;overflow:hidden}
+      .bar i{display:block;height:100%;width:40%;border-radius:99px;background:linear-gradient(90deg,#ffe53b,#ff2525,#00f5a0);animation:load 2.2s ease-in-out infinite}
+      @keyframes load{0%{margin-left:-40%}100%{margin-left:100%}}
+      .tag{display:inline-block;margin-top:1rem;padding:.4rem 1rem;border-radius:99px;background:rgba(0,0,0,.28);font-size:.9rem;letter-spacing:.04em}
+      </style></head><body><div class="card"><div class="ic">&#128013;</div><h1>Python app is getting back up</h1><p>The service is temporarily unavailable.</p><p>This page checks again <b>automatically</b>, and you will be taken to the app as soon as it is ready.</p><div class="bar"><i></i></div><span class="tag">&#128260; Auto-retry every 10 seconds</span></div></body></html>';
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autodown-notes
+  namespace: notes
+  annotations:
+    bunkerweb.io/CONFIG_TYPE: "server-http"
+    bunkerweb.io/CONFIG_SITE: "notes.waf.local"
+data:
+  auto-down-page.conf: |
+    # Upstream (the app) unreachable -> show this page; when the app is back the real app is served again.
+    error_page 502 503 504 @bw_app_down;
+    location @bw_app_down {
+      internal;
+      modsecurity off;
+      default_type text/html;
+      charset utf-8;
+      add_header Retry-After 30 always;
+      add_header Cache-Control "no-store" always;
+      return 503 '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="10"><title>Notes app is getting back up</title><style>
+      *{box-sizing:border-box}
+      body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:Segoe UI,system-ui,sans-serif;color:#fff;background:linear-gradient(-45deg,#11998e,#38ef7d,#0575e6,#021b79);background-size:400% 400%;animation:bg 14s ease infinite}
+      @keyframes bg{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+      .card{width:min(92vw,560px);padding:2.6rem 2.2rem;text-align:center;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.4);border-radius:24px;backdrop-filter:blur(14px);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+      .ic{font-size:5rem;display:inline-block;animation:pulse 2s ease-in-out infinite;filter:drop-shadow(0 6px 10px rgba(0,0,0,.35))}
+      @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
+      h1{margin:.4rem 0 .6rem;font-size:2.1rem;text-shadow:0 3px 12px rgba(0,0,0,.35)}
+      p{margin:.3rem 0;font-size:1.1rem;opacity:.95;line-height:1.5}
+      .bar{margin:1.8rem auto 1rem;height:12px;width:80%;background:rgba(255,255,255,.28);border-radius:99px;overflow:hidden}
+      .bar i{display:block;height:100%;width:40%;border-radius:99px;background:linear-gradient(90deg,#f9d423,#ff4e50,#fc00ff);animation:load 2.2s ease-in-out infinite}
+      @keyframes load{0%{margin-left:-40%}100%{margin-left:100%}}
+      .tag{display:inline-block;margin-top:1rem;padding:.4rem 1rem;border-radius:99px;background:rgba(0,0,0,.28);font-size:.9rem;letter-spacing:.04em}
+      </style></head><body><div class="card"><div class="ic">&#128221;</div><h1>Notes app is getting back up</h1><p>The service is temporarily unavailable.</p><p>This page checks again <b>automatically</b>, and you will be taken to the app as soon as it is ready.</p><div class="bar"><i></i></div><span class="tag">&#128260; Auto-retry every 10 seconds</span></div></body></html>';
+    }
