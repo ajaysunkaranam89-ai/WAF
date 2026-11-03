@@ -68,16 +68,23 @@ Tested on a throwaway app: no pods -> page; pod started -> real app back in ~15 
 kubectl apply -f bunkerweb/auto-error-page.yaml -f bunkerweb/ingresses.yaml
 ```
 
-## Maintenance mode (python app, through BunkerWeb)
-`bunkerweb/maintenance-python.yaml` is a ConfigMap that BunkerWeb loads as a custom nginx config for `python.waf.local`:
-every request gets **HTTP 503** and a "We will be back soon" page (with `Retry-After`); the app itself is untouched and
-other sites (notes) keep working. Only traffic that goes **through BunkerWeb** is affected, not direct forwards to the app.
-```bash
-kubectl apply  -f bunkerweb/maintenance-python.yaml     # maintenance ON  (takes effect in ~30 s)
-kubectl delete -f bunkerweb/maintenance-python.yaml     # maintenance OFF
+## Maintenance mode for planned updates (app keeps running)
+Use this when the app is healthy but you are about to deploy an update and want every user to see a maintenance page instead.
+The application is **not stopped**: BunkerWeb answers every request for the site with **HTTP 503** and a colourful
+"We will be back soon" page (with `Retry-After`), and the app pods keep running so you can update them behind the page.
+Only traffic that goes **through BunkerWeb** is affected (direct port-forwards to the app still work, handy for your own checks).
+
+```powershell
+cd bunkerweb
+.\maintenance.ps1 python on      # maintenance ON  for the python app (about 30-45 s to take effect)
+.\maintenance.ps1 python off     # back to normal
+.\maintenance.ps1 notes  on      # same for the notes app
+.\maintenance.ps1 all    off     # both
 ```
-To do the same for another site, copy the file and change `namespace` and the `bunkerweb.io/CONFIG_SITE` hostname.
-Tip: test with `127.0.0.1`, not `localhost`: on Windows `localhost` tries IPv6 first, where Docker Desktop answers on port 8080.
+or without the script: `kubectl apply -f bunkerweb/maintenance-python.yaml` (ON) / `kubectl delete -f ...` (OFF); same for `maintenance-notes.yaml`.
+How it works: a ConfigMap annotated `bunkerweb.io/CONFIG_TYPE: server-http` and `CONFIG_SITE: <host>` that makes nginx
+`return 503` with the page. Tested: python in maintenance -> 503 page, app 3/3 ready, direct app 200, notes unaffected; `all on` / `all off` both OK.
+Not to be confused with the automatic page below, which only appears when the app is actually down.
 
 ## Settings (`bunkerweb/values.yaml`)
 `securityMode: block` (use `detect` to only log), ModSecurity + CRS v4 on, `service.type: ClusterIP` (kind has no LoadBalancer).
