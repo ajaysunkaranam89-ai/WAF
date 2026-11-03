@@ -1,7 +1,7 @@
 # MAINTENANCE MODE for python.waf.local (served through BunkerWeb).
 #   ON : kubectl apply  -f bunkerweb/maintenance-python.yaml
 #   OFF: kubectl delete -f bunkerweb/maintenance-python.yaml
-# While applied, every request to the site gets HTTP 503 and the page below; the app is untouched.
+# While applied, every request to the site gets HTTP 503 and the colourful page below; the app is untouched.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,8 +13,22 @@ metadata:
 data:
   maintenance.conf: |
     default_type text/html;
+    charset utf-8;
     add_header Retry-After 1800 always;
     add_header Cache-Control "no-store" always;
     if ($request_uri != "/__bw_maintenance_never__") {
-      return 503 '<!doctype html><html><head><meta charset="utf-8"><title>Under maintenance</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,sans-serif;background:#f4f6f8;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}div{background:#fff;padding:2.5rem 3rem;border-radius:12px;box-shadow:0 2px 12px #0002;text-align:center}h1{margin:0 0 .5rem}p{color:#555}</style></head><body><div><h1>We will be back soon</h1><p>This application is under scheduled maintenance.<br>Please try again in a little while.</p></div></body></html>';
+      return 503 '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Under maintenance</title><style>
+      *{box-sizing:border-box}
+      body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:Segoe UI,system-ui,sans-serif;color:#fff;background:linear-gradient(-45deg,#ff6a00,#ee0979,#7f00ff,#00c6ff);background-size:400% 400%;animation:bg 14s ease infinite}
+      @keyframes bg{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+      .card{width:min(92vw,560px);padding:2.6rem 2.2rem;text-align:center;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.4);border-radius:24px;backdrop-filter:blur(14px);box-shadow:0 20px 60px rgba(0,0,0,.35)}
+      .gear{font-size:5rem;display:inline-block;animation:spin 6s linear infinite;filter:drop-shadow(0 6px 10px rgba(0,0,0,.35))}
+      @keyframes spin{to{transform:rotate(360deg)}}
+      h1{margin:.4rem 0 .6rem;font-size:2.2rem;text-shadow:0 3px 12px rgba(0,0,0,.35)}
+      p{margin:.3rem 0;font-size:1.1rem;opacity:.95;line-height:1.5}
+      .bar{margin:1.8rem auto 1rem;height:12px;width:80%;background:rgba(255,255,255,.28);border-radius:99px;overflow:hidden}
+      .bar i{display:block;height:100%;width:40%;border-radius:99px;background:linear-gradient(90deg,#ffe53b,#ff2525,#00f5a0);animation:load 2.2s ease-in-out infinite}
+      @keyframes load{0%{margin-left:-40%}100%{margin-left:100%}}
+      .tag{display:inline-block;margin-top:1rem;padding:.4rem 1rem;border-radius:99px;background:rgba(0,0,0,.28);font-size:.9rem;letter-spacing:.04em}
+      </style></head><body><div class="card"><div class="gear">&#9881;&#65039;</div><h1>We will be back soon!</h1><p>Our application is getting a <b>fresh upgrade</b>.</p><p>Thank you for your patience &#128156;</p><div class="bar"><i></i></div><span class="tag">&#128736;&#65039; Scheduled maintenance &middot; please try again shortly</span></div></body></html>';
     }
