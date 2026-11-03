@@ -39,10 +39,23 @@ kubectl exec -it -n safeline deploy/safeline-mgt -c mgt -- resetadmin   # prints
 ```
 Open **https://localhost:9443** (self-signed certificate, accept the warning) and log in with what `resetadmin` printed.
 
-## Protect a site
-In the console add a site whose upstream is a Kubernetes Service, for example `http://notes-app.notes.svc.cluster.local:80`,
-listening on port 80 or 443 (the only ports exposed by `safeline-waf`; add more to that Service if you use other ports).
-Send traffic through `svc/safeline-waf`, for example `kubectl port-forward -n safeline svc/safeline-waf 8080:80`.
+## Protect sites (example: two apps)
+`svc/safeline-waf` exposes ports 80, 443, 8081 and 8082 (add more ports to that Service if you need them). Sites are added
+in the console (*Websites / Applications > Add*), with the **upstream** set to a Kubernetes Service DNS name:
+
+| Site | Domain | Port | Upstream |
+|---|---|---|---|
+| Notes app | `*` (any) | `8081` | `http://notes-app.notes.svc.cluster.local:80` |
+| Python app | `*` (any) | `8082` | `http://python-app-service.python-app.svc.cluster.local:80` |
+
+Reach them through the WAF (localhost-only forwards):
+```bash
+kubectl port-forward -n safeline svc/safeline-waf 8081:8081 8082:8082
+curl http://localhost:8081/health                      # normal request: passes through to the app
+curl -i "http://localhost:8081/api/notes?id=1' OR '1'='1"   # SQL-injection-looking request: should be blocked (HTTP 403)
+curl -i "http://localhost:8082/?q=<script>alert(1)</script>"  # XSS-looking request: should be blocked
+```
+The engine pod can reach both upstreams (verified: HTTP 200 from inside the `safeline-tengine` pod).
 
 ## Status of this port
 Tested on kind (Kubernetes 1.37): all 7 pods run stably, the console answers (`/api/open/health` returns `{"status":"ok"}`),
