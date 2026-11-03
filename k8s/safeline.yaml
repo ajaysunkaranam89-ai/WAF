@@ -1,0 +1,466 @@
+# SafeLine (Chaitin) web application firewall, ported from the project's official docker compose file
+# (https://github.com/chaitin/SafeLine, compose.yaml) to a kind cluster. There is no official Kubernetes install.
+#
+# Layout: one Deployment per SafeLine component + PostgreSQL. In compose the components reach each other by
+# container name (safeline-mgt, safeline-detector, ...) and share folders; here every component has a Service with
+# exactly that name, and the shared folders are sub-paths of ONE volume (safeline-data). A local-path volume lives on
+# a single node, so all pods that mount it run on that node.
+#
+# The database password is a random value in Secret "safeline-db" (never in this file). Create it once:
+#   kubectl create namespace safeline
+#   kubectl -n safeline create secret generic safeline-db --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 16)"
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: safeline
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: safeline-pg-data
+  namespace: safeline
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: safeline-data
+  namespace: safeline
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+# ---------------------------------------------------------------- PostgreSQL
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-pg
+  namespace: safeline
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: safeline-pg
+  template:
+    metadata:
+      labels:
+        app: safeline-pg
+    spec:
+      containers:
+        - name: postgres
+          image: chaitin/safeline-postgres:15.2
+          args: ["postgres", "-c", "max_connections=600"]
+          env:
+            - name: POSTGRES_USER
+              value: safeline-ce
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: safeline-db
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "safeline-ce", "-d", "safeline-ce"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: safeline-pg-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-pg
+  namespace: safeline
+spec:
+  selector:
+    app: safeline-pg
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+# ---------------------------------------------------------------- management console (mgt)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-mgt
+  namespace: safeline
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: safeline-mgt
+  template:
+    metadata:
+      labels:
+        app: safeline-mgt
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: chaitin/safeline-postgres:15.2
+          command: ["sh", "-c", "until pg_isready -h safeline-pg -U safeline-ce -d safeline-ce; do echo waiting for database; sleep 3; done"]
+      containers:
+        - name: mgt
+          image: chaitin/safeline-mgt-g:9.4.3
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: safeline-db
+                  key: POSTGRES_PASSWORD
+            - name: MGT_PG
+              value: postgres://safeline-ce:$(POSTGRES_PASSWORD)@safeline-pg/safeline-ce?sslmode=disable
+            # mgt's nginx only lets "/inner" requests in from one /24 (compose default 172.22.222). The SafeLine pods run
+            # on node mycluster-worker2 (where the shared volume lives), whose pod range is 10.244.1.0/24.
+            # If the volume ever moves to another node, change this to that node's pod range.
+            - name: SUBNET_PREFIX
+              value: "10.244.1"
+          ports:
+            - containerPort: 1443
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -k -f https://localhost:1443/api/open/health"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+          volumeMounts:
+            - { name: data, mountPath: /app/data, subPath: mgt }
+            - { name: data, mountPath: /app/log/nginx, subPath: logs-nginx }
+            - { name: data, mountPath: /app/sock, subPath: sock }
+            - { name: run, mountPath: /app/run }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: safeline-data
+        - name: run
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-mgt
+  namespace: safeline
+spec:
+  clusterIP: None       # headless: DNS name -> pod, every port reachable (components talk on several ports)
+  selector:
+    app: safeline-mgt
+  ports:
+    - name: console
+      port: 1443
+      targetPort: 1443
+---
+# ---------------------------------------------------------------- detector (the attack-detection engine)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-detector
+  namespace: safeline
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: safeline-detector
+  template:
+    metadata:
+      labels:
+        app: safeline-detector
+    spec:
+      containers:
+        - name: detector
+          image: chaitin/safeline-detector-g:9.4.3
+          env:
+            - name: LOG_DIR
+              value: /logs/detector
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - { name: data, mountPath: /resources/detector, subPath: detector }
+            - { name: data, mountPath: /logs/detector, subPath: logs-detector }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: safeline-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-detector
+  namespace: safeline
+spec:
+  clusterIP: None
+  selector:
+    app: safeline-detector
+  ports:
+    - name: snserver
+      port: 8000
+      targetPort: 8000
+---
+# ---------------------------------------------------------------- tengine (the WAF engine / reverse proxy)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-tengine
+  namespace: safeline
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: safeline-tengine
+  template:
+    metadata:
+      labels:
+        app: safeline-tengine
+    spec:
+      containers:
+        - name: tengine
+          image: chaitin/safeline-tengine-g:9.4.3
+          env:
+            - name: TCD_MGT_API
+              value: https://safeline-mgt:1443/api/open/publish/server
+            - name: TCD_SNSERVER
+              value: safeline-detector:8000
+            - name: SNSERVER_ADDR
+              value: safeline-detector:8000
+            - name: CHAOS_ADDR
+              value: safeline-chaos
+          ports:
+            - { name: http, containerPort: 80 }
+            - { name: https, containerPort: 443 }
+          # By default nginx starts one worker per CPU core (12 here, ~80Mi each) and gets OOM-killed at 512Mi/1Gi.
+          # Keep 2Gi as headroom; the nginx.conf in the data volume is also capped to "worker_processes 2;".
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - { name: data, mountPath: /etc/nginx, subPath: nginx }
+            - { name: data, mountPath: /resources/detector, subPath: detector }
+            - { name: data, mountPath: /resources/chaos, subPath: chaos }
+            - { name: data, mountPath: /var/log/nginx, subPath: logs-nginx }
+            - { name: data, mountPath: /usr/local/nginx/cache, subPath: cache }
+            - { name: data, mountPath: /app/sock, subPath: sock }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: safeline-data
+---
+# The WAF engine: protected sites are served from these ports. Add more ports here if you add sites on other ports.
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-waf
+  namespace: safeline
+spec:
+  selector:
+    app: safeline-tengine
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+    - name: https
+      port: 443
+      targetPort: 443
+---
+# ---------------------------------------------------------------- luigi
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-luigi
+  namespace: safeline
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: safeline-luigi
+  template:
+    metadata:
+      labels:
+        app: safeline-luigi
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: chaitin/safeline-postgres:15.2
+          command: ["sh", "-c", "until pg_isready -h safeline-pg -U safeline-ce -d safeline-ce; do echo waiting for database; sleep 3; done"]
+      containers:
+        - name: luigi
+          image: chaitin/safeline-luigi-g:9.4.3
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: safeline-db
+                  key: POSTGRES_PASSWORD
+            - name: MGT_IP
+              value: safeline-mgt
+            - name: LUIGI_PG
+              value: postgres://safeline-ce:$(POSTGRES_PASSWORD)@safeline-pg/safeline-ce?sslmode=disable
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          volumeMounts:
+            - { name: data, mountPath: /app/data, subPath: luigi }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: safeline-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-luigi
+  namespace: safeline
+spec:
+  clusterIP: None
+  selector:
+    app: safeline-luigi
+  ports:
+    - name: placeholder
+      port: 9999
+      targetPort: 9999
+---
+# ---------------------------------------------------------------- fvm
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-fvm
+  namespace: safeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: safeline-fvm
+  template:
+    metadata:
+      labels:
+        app: safeline-fvm
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: mycluster-worker2     # same node (and pod range) as the other SafeLine components
+      containers:
+        - name: fvm
+          image: chaitin/safeline-fvm-g:9.4.3
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-fvm
+  namespace: safeline
+spec:
+  clusterIP: None
+  selector:
+    app: safeline-fvm
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+# ---------------------------------------------------------------- chaos
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: safeline-chaos
+  namespace: safeline
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: safeline-chaos
+  template:
+    metadata:
+      labels:
+        app: safeline-chaos
+    spec:
+      initContainers:
+        - name: wait-for-db
+          image: chaitin/safeline-postgres:15.2
+          command: ["sh", "-c", "until pg_isready -h safeline-pg -U safeline-ce -d safeline-ce; do echo waiting for database; sleep 3; done"]
+      containers:
+        - name: chaos
+          image: chaitin/safeline-chaos-g:9.4.3
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: safeline-db
+                  key: POSTGRES_PASSWORD
+            - name: DB_ADDR
+              value: postgres://safeline-ce:$(POSTGRES_PASSWORD)@safeline-pg/safeline-ce?sslmode=disable
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          volumeMounts:
+            - { name: data, mountPath: /app/sock, subPath: sock }
+            - { name: data, mountPath: /app/chaos, subPath: chaos }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: safeline-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: safeline-chaos
+  namespace: safeline
+spec:
+  clusterIP: None
+  selector:
+    app: safeline-chaos
+  ports:
+    - name: placeholder
+      port: 9999
+      targetPort: 9999
