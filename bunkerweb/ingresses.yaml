@@ -1,0 +1,45 @@
+# Protect the two apps with BunkerWeb. Ingresses must live in the same namespace as the app's Service.
+# Hostnames are lab names: map them to 127.0.0.1 in the hosts file (see README) or send a Host header.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: notes-app-waf
+  namespace: notes
+  annotations:
+    bunkerweb.io/USE_MODSECURITY: "yes"
+    bunkerweb.io/USE_MODSECURITY_CRS: "yes"
+spec:
+  ingressClassName: bunkerweb
+  rules:
+    - host: notes.waf.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: notes-app
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: python-app-waf
+  namespace: python-app
+  annotations:
+    bunkerweb.io/USE_MODSECURITY: "yes"
+    bunkerweb.io/USE_MODSECURITY_CRS: "yes"
+spec:
+  ingressClassName: bunkerweb
+  rules:
+    - host: python.waf.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: python-app-service
+                port:
+                  number: 80

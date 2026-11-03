@@ -1,13 +1,66 @@
-# Web Application Firewall on Kubernetes (kind): ModSecurity + OWASP CRS
+# Web Application Firewalls on Kubernetes (kind)
 
-Kubernetes manifests for an open-source WAF in front of two apps. It uses the
-[OWASP ModSecurity Core Rule Set](https://github.com/coreruleset/modsecurity-crs-docker) image (nginx + ModSecurity v3 +
-the OWASP Core Rule Set). Each protected app gets one small reverse-proxy Deployment: clean requests are forwarded to the
-app's Service, attacks get an HTTP 403. No secrets, no database, no volumes.
+Two open-source WAFs for the notes app and python app. Both run side by side; keep the one you prefer.
 
-> History: SafeLine (Chaitin) was tried first and removed. Its stack needs a detector management token that the
-> Docker Compose file does not document, so adding a site always failed with `rules compile error`
-> (detector answered `401 without valid token` to fvm/luigi). ModSecurity + CRS is simpler and has no such dependency.
+| | **BunkerWeb** (has a web GUI) | **ModSecurity + OWASP CRS** (no GUI) |
+|---|---|---|
+| Folder | [`bunkerweb/`](bunkerweb) | [`k8s/`](k8s) |
+| Namespace | `bunkerweb` | `waf` |
+| How apps are protected | Kubernetes **Ingress** (class `bunkerweb`) | one reverse-proxy pod per app (ports 8081/8082) |
+| Pods / memory | 6 pods (~1 GB) | 2 pods (~150 MB) |
+| GUI | yes: setup wizard, sites, blocked requests | none (pod logs only) |
+
+---
+
+# A. BunkerWeb (GUI)
+
+[BunkerWeb](https://github.com/bunkerity/bunkerweb) = nginx + ModSecurity + OWASP Core Rule Set + bad-behavior bans, with a web UI.
+Installed from the official Helm chart (`bunkerweb/bunkerweb` 1.3.0, BunkerWeb 1.6.17). **No secrets are stored in this repo.**
+
+Components (namespace `bunkerweb`): `mybw-bunkerweb` (the WAF), `scheduler`, `controller` (watches Ingresses), `ui`, `mariadb`, `redis`.
+
+## Install
+```bash
+helm repo add bunkerweb https://repo.bunkerweb.io/charts
+helm repo update
+helm install mybw bunkerweb/bunkerweb -n bunkerweb --create-namespace -f bunkerweb/values.yaml
+kubectl apply -f bunkerweb/ingresses.yaml        # protects the two apps
+kubectl get pods -n bunkerweb                    # all 1/1 Running (first start pulls images)
+```
+Uninstall: `kubectl delete -f bunkerweb/ingresses.yaml && helm uninstall mybw -n bunkerweb && kubectl delete namespace bunkerweb`
+
+## Open the GUI
+```bash
+kubectl port-forward -n bunkerweb svc/ui-mybw-bunkerweb 7000:7000
+```
+Open **http://localhost:7000** (redirects to the setup wizard). The wizard asks you to create the admin username and password
+yourself: choose your own and do not commit it. Later logins use the same page.
+
+## Use the protected apps
+The Ingresses use lab hostnames `notes.waf.local` and `python.waf.local`:
+```bash
+kubectl port-forward -n bunkerweb svc/mybw-bunkerweb-external 8080:80
+```
+- With curl: `curl -H "Host: notes.waf.local" http://localhost:8080/`
+- In a browser: add `127.0.0.1 notes.waf.local python.waf.local` to `C:\Windows\System32\drivers\etc\hosts`, then open http://notes.waf.local:8080
+
+## Verified (2026-11-03, kind)
+| Request (Host: notes.waf.local and python.waf.local) | Result |
+|---|---|
+| `GET /` | 200, passes through |
+| `/?id=1' OR '1'='1` (SQL injection) | **403 blocked** |
+| `/?q=<script>alert(1)</script>` (XSS) | **403 blocked** |
+| GUI service | 303 to `/setup` (wizard) |
+
+Note: after a few blocked requests from one address BunkerWeb's *bad behavior* feature briefly bans it (HTTP 429), then it recovers.
+
+## Settings (`bunkerweb/values.yaml`)
+`securityMode: block` (use `detect` to only log), ModSecurity + CRS v4 on, `service.type: ClusterIP` (kind has no LoadBalancer).
+Per-site settings go in Ingress annotations (`bunkerweb.io/<SETTING>`); to protect another app add an Ingress with `ingressClassName: bunkerweb` in the app's namespace.
+
+---
+
+# B. ModSecurity + OWASP CRS (no GUI)
 
 ## What gets deployed (namespace `waf`)
 

@@ -1,0 +1,33 @@
+# Helm values for BunkerWeb on a small kind cluster (chart bunkerweb/bunkerweb 1.3.0, BunkerWeb 1.6.17).
+service:
+  type: ClusterIP            # reached with kubectl port-forward (kind has no LoadBalancer)
+
+bunkerweb:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+
+scheduler:
+  resources:
+    requests: { cpu: 50m, memory: 192Mi }
+    limits: { memory: 512Mi }
+  features:
+    global:
+      securityMode: "block"          # block attacks (use "detect" to only log)
+    modsecurity:
+      useModsecurity: "yes"
+      useModsecurityCrs: "yes"
+      modsecurityCrsVersion: "4"
+      modsecuritySecRuleEngine: "On"
+
+settings:
+  ui:
+    wizard: true                     # first-run setup wizard creates the admin account in the browser
+    ingress:
+      enabled: true
+      ingressClassName: bunkerweb
+      serverName: bwui.local
+      serverPath: /
+  kubernetes:
+    ingressClass: bunkerweb
