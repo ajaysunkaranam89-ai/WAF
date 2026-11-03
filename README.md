@@ -1,80 +1,73 @@
-# SafeLine WAF on Kubernetes (kind)
+# Web Application Firewall on Kubernetes (kind): ModSecurity + OWASP CRS
 
-Kubernetes manifests to run [Chaitin SafeLine](https://github.com/chaitin/SafeLine) (open-source web application firewall,
-Community Edition 9.4.3) on a small kind cluster. SafeLine officially ships only as Docker Compose, so this is a port of its
-`compose.yaml`. **No secrets are stored in this repo.**
+Kubernetes manifests for an open-source WAF in front of two apps. It uses the
+[OWASP ModSecurity Core Rule Set](https://github.com/coreruleset/modsecurity-crs-docker) image (nginx + ModSecurity v3 +
+the OWASP Core Rule Set). Each protected app gets one small reverse-proxy Deployment: clean requests are forwarded to the
+app's Service, attacks get an HTTP 403. No secrets, no database, no volumes.
 
-## What gets deployed (namespace `safeline`)
+> History: SafeLine (Chaitin) was tried first and removed. Its stack needs a detector management token that the
+> Docker Compose file does not document, so adding a site always failed with `rules compile error`
+> (detector answered `401 without valid token` to fvm/luigi). ModSecurity + CRS is simpler and has no such dependency.
 
-| Component | Image | Role |
+## What gets deployed (namespace `waf`)
+
+| Deployment / Service | Listens on | Forwards to |
 |---|---|---|
-| `safeline-pg` | `chaitin/safeline-postgres:15.2` | PostgreSQL (2 Gi volume) |
-| `safeline-mgt` | `chaitin/safeline-mgt-g:9.4.3` | management console (HTTPS on port 1443) |
-| `safeline-detector` | `chaitin/safeline-detector-g:9.4.3` | attack-detection engine |
-| `safeline-tengine` | `chaitin/safeline-tengine-g:9.4.3` | the WAF / reverse proxy (ports 80, 443) |
-| `safeline-luigi`, `safeline-fvm`, `safeline-chaos` | `chaitin/safeline-*-g:9.4.3` | supporting services |
+| `waf-notes` | `8081` | `http://notes-app.notes.svc.cluster.local:80` |
+| `waf-python` | `8082` | `http://python-app-service.python-app.svc.cluster.local:80` |
 
-Shared data (config, rules, sockets, logs) lives in one 5 Gi volume (`safeline-data`), mounted with a different sub-path per component.
+Image: `owasp/modsecurity-crs:nginx-alpine`. Each pod uses about 64 Mi requested (256 Mi limit).
 
-## Install
+## Install / uninstall
 
 ```bash
-# 1. namespace + a random database password (the password never goes into git)
-kubectl create namespace safeline
-kubectl -n safeline create secret generic safeline-db --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 16)"
-
-# 2. everything else
-kubectl apply -f k8s/safeline.yaml
-kubectl get pods -n safeline -w          # wait until all 7 pods are 1/1 Running (first start pulls ~2 GB of images)
-
-# 3. one-time: cap nginx workers (see "Why" below)
-kubectl exec -n safeline deploy/safeline-tengine -c tengine -- sh -c 'sed -i "s/^# worker_processes 4;/worker_processes 2;/" /etc/nginx/nginx.conf && nginx -s reload'
+kubectl apply -f k8s/waf.yaml
+kubectl get pods -n waf                       # both 1/1 Running
+kubectl delete namespace waf                  # uninstall (apps are untouched)
 ```
 
-## First login
+## Use it
+
+Clients must talk to the WAF instead of the app. Localhost-only forwards:
 
 ```bash
-kubectl port-forward -n safeline svc/safeline-mgt 9443:1443        # keeps the console on localhost only
-kubectl exec -it -n safeline deploy/safeline-mgt -c mgt -- resetadmin   # prints the admin username and a new password
+kubectl port-forward -n waf svc/waf-notes 8081:8081
+kubectl port-forward -n waf svc/waf-python 8082:8082
 ```
-Open **https://localhost:9443** (self-signed certificate, accept the warning) and log in with what `resetadmin` printed.
+To reach them from other machines, add `--address 0.0.0.0` (and open the Windows firewall port).
 
-## Protect sites (example: two apps)
-`svc/safeline-waf` exposes ports 80, 443, 8081 and 8082 (add more ports to that Service if you need them). Sites are added
-in the console (*Websites / Applications > Add*), with the **upstream** set to a Kubernetes Service DNS name:
+## Verified (2026-11-03, kind, both apps)
 
-| Site | Domain | Port | Upstream |
-|---|---|---|---|
-| Notes app | `*` (any) | `8081` | `http://notes-app.notes.svc.cluster.local:80` |
-| Python app | `*` (any) | `8082` | `http://python-app-service.python-app.svc.cluster.local:80` |
+| Request | Result |
+|---|---|
+| `GET /` | 200, passes through to the app |
+| `GET /?id=1' OR '1'='1` (SQL injection) | **403 blocked** |
+| `GET /?q=<script>alert(1)</script>` (XSS) | **403 blocked** |
+| `GET /../../etc/passwd` (path traversal) | **400 rejected** |
+| scanner user-agent `sqlmap/1.7` | **403 blocked** |
+| notes app `/health` through the WAF | `{"status":"ok","db":"up"}` |
 
-Reach them through the WAF (localhost-only forwards):
+Re-run the checks:
 ```bash
-kubectl port-forward -n safeline svc/safeline-waf 8081:8081 8082:8082
-curl http://localhost:8081/health                      # normal request: passes through to the app
-curl -i "http://localhost:8081/api/notes?id=1' OR '1'='1"   # SQL-injection-looking request: should be blocked (HTTP 403)
-curl -i "http://localhost:8082/?q=<script>alert(1)</script>"  # XSS-looking request: should be blocked
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081/
+curl -s -o /dev/null -w "%{http_code}\n" -G http://localhost:8081/ --data-urlencode "id=1' OR '1'='1"
+curl -s -o /dev/null -w "%{http_code}\n" -G http://localhost:8081/ --data-urlencode "q=<script>alert(1)</script>"
 ```
-The engine pod can reach both upstreams (verified: HTTP 200 from inside the `safeline-tengine` pod).
 
-## Status of this port
-Tested on kind (Kubernetes 1.37): all 7 pods run stably, the console answers (`/api/open/health` returns `{"status":"ok"}`),
-the whole stack uses roughly 1 GB of memory. **Not tested yet:** logging in, adding a protected site and blocking an attack.
+## Tuning (environment variables in `k8s/waf.yaml`)
 
-## Why the manifests look the way they do (things that failed first)
+| Variable | Meaning |
+|---|---|
+| `MODSEC_RULE_ENGINE` | `On` = block attacks; `DetectionOnly` = only log (use this first on a new app to find false positives) |
+| `BLOCKING_PARANOIA` | CRS paranoia level 1-4. 1 = fewest false positives, 4 = strictest |
+| `BACKEND` | upstream URL the WAF forwards to |
+| `PORT` | port the WAF listens on |
 
-| Symptom | Cause | What the manifest does |
-|---|---|---|
-| `bind: address already in use` on port 80 | `mgt`, `fvm` and `tengine` all listen on port 80; in compose they have separate addresses | one Deployment (own pod, own network) per component |
-| `access forbidden by rule` in mgt, components fail | mgt's nginx only accepts internal `/inner` calls from one /24 (compose default `172.22.222`), set by env `SUBNET_PREFIX` | `SUBNET_PREFIX=10.244.1` = the pod range of the node that holds the volume |
-| components cannot find each other | compose uses container names | one Service per component with exactly those names (headless) |
-| `tengine` `OOMKilled` | nginx starts one worker per CPU core (12 here, ~80 Mi each) | `worker_processes 2;` (step 3) and a 2 Gi limit as headroom |
-| pods on different nodes get different pod ranges | the shared volume is a node-local volume | `fvm` is pinned to `mycluster-worker2`; the other pods follow the volume |
+Blocked requests are logged by the pod: `kubectl logs -n waf deploy/waf-notes`.
 
-If your volume lands on a different node, change `SUBNET_PREFIX` (in `safeline-mgt`) and the `nodeSelector` (in `safeline-fvm`) to that node's pod range and name:
-`kubectl get pods -n safeline -o wide`.
+## Add another protected app
+Copy one Deployment + Service pair in `k8s/waf.yaml`, change the names, `PORT` and `BACKEND`.
 
-## Uninstall
-```bash
-kubectl delete namespace safeline      # removes everything, including the volumes (rules and settings are lost)
-```
+## Limits
+This is a lab setup: no TLS termination (terminate TLS in front of the WAF), no rate limiting, a single replica per app,
+and CRS only (no custom rules). A WAF reduces risk but does not replace fixing the application.

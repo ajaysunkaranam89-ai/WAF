@@ -1,0 +1,117 @@
+# ModSecurity v3 + OWASP Core Rule Set (CRS) as a reverse-proxy WAF in front of two apps.
+# One small nginx+ModSecurity Deployment per protected app; each listens on its own port and forwards
+# clean requests to the app's Kubernetes Service. No secrets, no database, no persistent volume.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: waf
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waf-notes
+  namespace: waf
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: waf-notes
+  template:
+    metadata:
+      labels:
+        app: waf-notes
+    spec:
+      containers:
+        - name: modsecurity
+          image: owasp/modsecurity-crs:nginx-alpine
+          ports:
+            - containerPort: 8081
+          env:
+            - name: PORT
+              value: "8081"
+            - name: PROXY
+              value: "1"
+            - name: BACKEND
+              value: http://notes-app.notes.svc.cluster.local:80
+            - name: MODSEC_RULE_ENGINE      # On = block, DetectionOnly = log only
+              value: "On"
+            - name: BLOCKING_PARANOIA       # CRS paranoia level 1 (fewest false positives) .. 4
+              value: "1"
+          readinessProbe:
+            tcpSocket:
+              port: 8081
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waf-notes
+  namespace: waf
+spec:
+  selector:
+    app: waf-notes
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waf-python
+  namespace: waf
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: waf-python
+  template:
+    metadata:
+      labels:
+        app: waf-python
+    spec:
+      containers:
+        - name: modsecurity
+          image: owasp/modsecurity-crs:nginx-alpine
+          ports:
+            - containerPort: 8082
+          env:
+            - name: PORT
+              value: "8082"
+            - name: PROXY
+              value: "1"
+            - name: BACKEND
+              value: http://python-app-service.python-app.svc.cluster.local:80
+            - name: MODSEC_RULE_ENGINE
+              value: "On"
+            - name: BLOCKING_PARANOIA
+              value: "1"
+          readinessProbe:
+            tcpSocket:
+              port: 8082
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waf-python
+  namespace: waf
+spec:
+  selector:
+    app: waf-python
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8082
